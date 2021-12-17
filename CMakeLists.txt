@@ -143,7 +143,11 @@ add_subdirectory(src)
 # ccache executable
 #
 add_executable(ccache src/main.cpp)
-target_link_libraries(ccache PRIVATE standard_settings standard_warnings ccache_framework)
+if(STATIC_LINK)
+  target_link_libraries(ccache PRIVATE standard_settings standard_warnings ccache_framework -static-libgcc -static-libstdc++)
+else()
+  target_link_libraries(ccache PRIVATE standard_settings standard_warnings ccache_framework)
+endif()
 
 #
 # Documentation

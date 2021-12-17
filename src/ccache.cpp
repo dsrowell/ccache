@@ -2023,7 +2023,7 @@ calculate_result_and_manifest_key(Context& ctx,
   }
 
   if (result_key) {
-    LOG("Result key: {}", result_key->to_string());
+    LOG("Source/key: {} => {}", ctx.args_info.input_file, result_key->to_string());
   }
   return std::make_pair(result_key, manifest_key);
 }

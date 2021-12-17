@@ -1,0 +1,11 @@
+linux
+=====
+cd build
+export CC=$MIRROR_HOME/compilers/linux-x86_64-2.12/gnu9.2.0/bin/gcc
+export CXX=$MIRROR_HOME/compilers/linux-x86_64-2.12/gnu9.2.0/bin/g++
+$MIRROR_HOME/cmake/3.20.0/linux-x86_64/bin/cmake -DCMAKE_BUILD_TYPE=Release -DZSTD_FROM_INTERNET=ON -DZSTD_URL=http://nexus.lebanon.cd-adapco.com/content/repositories/thirdparty/zstd/zstd/1.5.2/zstd-1.5.2.tar.gz -DHIREDIS_FROM_INTERNET=ON -DHIREDIS_URL=http://nexus.lebanon.cd-adapco.com/content/repositories/thirdparty/hiredis/hiredis/1.1.0/hiredis-1.1.0.tar.gz -DENABLE_DOCUMENTATION=OFF ..
+
+windows
+=======
+cmake -DCMAKE_BUILD_TYPE=Release -DZSTD_FROM_INTERNET=ON -DHIREDIS_FROM_INTERNET=ON -DENABLE_DOCUMENTATION=OFF -DSTATIC_LINK=ON -DENABLE_DOCUMENTATION=OFF -G "MSYS Makefiles" ..
+make -j 12

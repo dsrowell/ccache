@@ -142,6 +142,11 @@ HttpStorageBackend::HttpStorageBackend(const Params& params)
       }
     } else if (attr.key == "operation-timeout") {
       operation_timeout = parse_timeout_attribute(attr.value);
+    } else if (attr.key == "header") {
+      const auto pair = util::split_once(attr.value, '=');
+      m_http_client.set_default_headers({
+         { std::string(pair.first).c_str(), std::string(*pair.second).c_str() },
+      });
     } else if (!is_framework_attribute(attr.key)) {
       LOG("Unknown attribute: {}", attr.key);
     }
