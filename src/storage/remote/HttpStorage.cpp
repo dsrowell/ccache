@@ -56,6 +56,7 @@ private:
   const std::string m_url_path;
   httplib::Client m_http_client;
   Layout m_layout = Layout::subdirs;
+  size_t m_max_size = 0;
 
   std::string get_entry_path(const Digest& key) const;
 };
@@ -142,6 +143,11 @@ HttpStorageBackend::HttpStorageBackend(const Params& params)
       }
     } else if (attr.key == "operation-timeout") {
       operation_timeout = parse_timeout_attribute(attr.value);
+    } else if (attr.key == "max-size") {
+      auto max_size = util::parse_unsigned(attr.value);
+      if (max_size) {
+        m_max_size = *max_size;
+      }
     } else if (attr.key == "header") {
       const auto pair = util::split_once(attr.value, '=');
       m_http_client.set_default_headers({
@@ -169,6 +175,54 @@ HttpStorageBackend::get(const Digest& key)
         to_string(result.error()),
         static_cast<int>(result.error()));
     return nonstd::make_unexpected(failure_from_httplib_error(result.error()));
+  }
+
+  // if the file is too large to come down in one chunk, ask for pieces
+  if (result->status == 413 && m_max_size > 0) {
+    size_t total_bytes = 1;
+
+    size_t bytes_received = 0;
+    std::string data;
+
+    const auto url_path = get_entry_path(key);
+
+    while (bytes_received < total_bytes) {
+      auto headers = httplib::Headers();
+      size_t end = bytes_received+m_max_size;
+      if (total_bytes > 1 && end > total_bytes) {
+        end = total_bytes;
+      }
+      headers.emplace("Range", FMT("bytes={}-{}", bytes_received, end-1));
+
+      const auto result = m_http_client.Get(url_path.c_str(), headers);
+
+      if (result.error() != httplib::Error::Success || !result) {
+        LOG("Failed to get {} from http storage: {} ({})",
+            url_path,
+            to_string(result.error()),
+            static_cast<int>(result.error()));
+        return nonstd::make_unexpected(Failure::error);
+      }
+
+      if (result->status < 200 || result->status >= 300) {
+        return std::nullopt;
+      }
+
+      data.append(result->body);
+      bytes_received += result->body.size();
+      if (total_bytes == 1) {
+        std::string range(result->get_header_value("Content-Range"));
+        size_t pos = range.find("/");
+        if (pos != std::string::npos) {
+          auto len = util::parse_unsigned(range.substr(pos+1, std::string::npos));
+          if (len) {
+            total_bytes = *len;
+          }
+        }
+      }
+    }
+
+    return util::Bytes(result->body.data(), result->body.size());
   }
 
   if (result->status < 200 || result->status >= 300) {
@@ -207,25 +261,63 @@ HttpStorageBackend::put(const Digest& key,
   }
 
   static const auto content_type = "application/octet-stream";
-  const auto result =
-    m_http_client.Put(url_path,
-                      reinterpret_cast<const char*>(value.data()),
-                      value.size(),
-                      content_type);
+  if (m_max_size == 0) {
+    const auto result =
+      m_http_client.Put(url_path,
+                        reinterpret_cast<const char*>(value.data()),
+                        value.size(),
+                        content_type);
 
-  if (result.error() != httplib::Error::Success || !result) {
-    LOG("Failed to put {} to http storage: {} ({})",
-        url_path,
-        to_string(result.error()),
-        static_cast<int>(result.error()));
-    return nonstd::make_unexpected(failure_from_httplib_error(result.error()));
-  }
+    if (result.error() != httplib::Error::Success || !result) {
+      LOG("Failed to put {} to http storage: {} ({})",
+          url_path,
+          to_string(result.error()),
+          static_cast<int>(result.error()));
+      return nonstd::make_unexpected(failure_from_httplib_error(result.error()));
+    }
 
-  if (result->status < 200 || result->status >= 300) {
-    LOG("Failed to put {} to http storage: status code: {}",
-        url_path,
-        result->status);
-    return nonstd::make_unexpected(failure_from_httplib_error(result.error()));
+    if (result->status < 200 || result->status >= 300) {
+      LOG("Failed to put {} to http storage: status code: {}",
+          url_path,
+          result->status);
+      return nonstd::make_unexpected(failure_from_httplib_error(result.error()));
+    }
+  } else {
+    size_t bytes_sent = 0;
+
+    while (bytes_sent < value.size()) {
+
+      size_t bytes_to_send = value.size() - bytes_sent;
+      if (bytes_to_send > m_max_size) {
+        bytes_to_send = m_max_size;
+      }
+
+      auto headers = httplib::Headers();
+      headers.emplace("Range", FMT("bytes={}-{}", bytes_sent, bytes_sent+bytes_to_send-1));
+
+      const auto result =
+        m_http_client.Put(url_path.c_str(),
+                          headers,
+                          reinterpret_cast<const char*>(value.data())+bytes_sent,
+                          bytes_to_send,
+                          content_type);
+
+      if (result.error() != httplib::Error::Success || !result) {
+        LOG("Failed to put {} to http storage: {} ({})",
+            url_path,
+            to_string(result.error()),
+            static_cast<int>(result.error()));
+        return nonstd::make_unexpected(Failure::error);
+      }
+
+      if (result->status < 200 || result->status >= 300) {
+        LOG("Failed to put {} to http storage: status code: {}",
+            url_path,
+            result->status);
+        return nonstd::make_unexpected(Failure::error);
+      }
+      bytes_sent += bytes_to_send;
+    }
   }
 
   return true;

@@ -15,6 +15,8 @@ import socket
 import sys
 
 
+max_size = int(os.getenv('HTTP_SERVER_MAX_SIZE', '1000000000'))
+
 class AuthenticationError(Exception):
     pass
 
@@ -31,27 +33,112 @@ class PUTEnabledHTTPRequestHandler(SimpleHTTPRequestHandler):
         super().__init__(*args, **kwargs)
 
     def do_GET(self):
+        path = self.translate_path(self.path)
+        print(f'do_GET({path})')
+        if not os.path.exists(path):
+            self.send_response(HTTPStatus.NOT_FOUND)
+            self.end_headers()
+            self.wfile.write(bytes("not found", "utf-8"))
+            return
+
         try:
             self._handle_auth()
-            super().do_GET()
+            file_length = os.path.getsize(path)
+            start = 0
+            if 'Range' in self.headers:
+                rng = self.headers["Range"]
+                parts = rng.split("=")
+                se = parts[1].split("-", 2)
+                start = int(se[0])
+                end = int(se[1])
+                endplus1 = end + 1
+                print(f'do_GET: Range {rng} {start} {end}')
+                if end >= file_length:
+                    end = file_length-1
+                endplus1 = end + 1
+                print(f'do_GET: {start} {end}')
+
+                with open(path, "rb") as f:
+                    body = f.read()
+                    body = body[start:endplus1]
+                print(f'do_GET: response headers: {end-start} bytes={start}-{end}/{file_length}')
+                print(f'size of body: {len(body)}')
+                self.send_response(HTTPStatus.OK)
+                self.send_header("Content-Length", endplus1-start)
+                self.send_header("Content-Type", "application/octet-stream")
+                self.send_header("Content-Range", f'bytes={start}-{end}/{file_length}')
+                self.end_headers()
+                self.wfile.write(body)
+                print(bytearray(body).hex())
+                return
+            else:
+                if file_length > max_size:
+                    print("do_GET: file too big")
+                    self.send_response(HTTPStatus.REQUEST_ENTITY_TOO_LARGE)
+                    self.send_header("Accept-Ranges", "bytes")
+                    self.end_headers()
+                    return
+                else:
+                    print('do_GET: do we get here?')
+                    with open(path, "rb") as f:
+                        body = f.read()
+                        body = body[start, end-start-1]
+                        print(bytearray(body).hex())
+                    self.send_response(HTTPStatus.OK)
+                    self.send_header("Content-Length", file_length)
+                    self.send_header("Content-Type", "application/octet-stream")
+                    self.end_headers()
+                    self.wfile.write(body)
+                    return
+
         except AuthenticationError:
             self.send_error(HTTPStatus.UNAUTHORIZED, "Need Authentication")
+        except OSError:
+            self.send_error(
+                HTTPStatus.INTERNAL_SERVER_ERROR, "Cannot open file for writing"
+            )
 
     def do_HEAD(self):
+        path = self.translate_path(self.path)
+        os.makedirs(os.path.dirname(path), exist_ok=True)
         try:
             self._handle_auth()
-            super().do_HEAD()
+            file_length = os.path.getsize(path)
+            self.send_response(HTTPStatus.OK)
+            self.send_header("Content-Length", file_length)
+            self.end_headers()
         except AuthenticationError:
             self.send_error(HTTPStatus.UNAUTHORIZED, "Need Authentication")
+        except OSError:
+            self.send_error(
+                HTTPStatus.INTERNAL_SERVER_ERROR, "Cannot find file"
+            )
 
     def do_PUT(self):
         path = self.translate_path(self.path)
         os.makedirs(os.path.dirname(path), exist_ok=True)
         try:
             self._handle_auth()
-            file_length = int(self.headers["Content-Length"])
-            with open(path, "wb") as output_file:
-                output_file.write(self.rfile.read(file_length))
+            content_length = int(self.headers["Content-Length"])
+            start = 0
+            end = -1
+            if 'Range' in self.headers:
+                rng = self.headers["Range"]
+                parts = rng.split("=")
+                start = int(parts[1].split("-")[0])
+                end = int(parts[1].split("-")[1])
+
+            if os.path.exists(path):
+                with open(path, "rb") as f:
+                    data = f.read()
+            else:
+                data = bytes('', 'utf-8')
+            print(f'previous size of {self.path}: {len(data)}')
+            print(f'inserting {content_length} bytes into data')
+            data = data[:start] + self.rfile.read(content_length) + data[end+content_length:]
+            print(f'new size of data: {len(data)}')
+            with open(path, "wb") as f:
+                f.write(data)
             self.send_response(HTTPStatus.CREATED)
             self.send_header("Content-Length", "0")
             self.end_headers()

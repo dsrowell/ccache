@@ -215,4 +215,25 @@ fi
         expect_stat files_in_cache 2 # fetched from remote
         expect_file_count 2 '*' remote # result + manifest
     fi
+
+    TEST "max size"
+
+    export HTTP_SERVER_MAX_SIZE=10
+    start_http_server 12780 secondary
+    unset HTTP_SERVER_MAX_SIZE
+
+    export CCACHE_SECONDARY_STORAGE="http://localhost:12780|layout=flat|max-size=10"
+
+    $CCACHE_COMPILE -c test.c
+    expect_stat direct_cache_hit 0
+    expect_stat cache_miss 1
+    expect_stat files_in_cache 2
+    expect_file_count 2 '*' secondary # result + manifest
+
+    $CCACHE -C >/dev/null
+    expect_stat files_in_cache 0
+
+    $CCACHE_COMPILE -c test.c
+    expect_stat direct_cache_hit 1
+    expect_stat cache_miss 1
 }
