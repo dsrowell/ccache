@@ -37,6 +37,11 @@
 
 #include <limits.h> // NOLINT: PATH_MAX is defined in limits.h
 
+#ifdef _WIN32
+#include <fileapi.h>
+#include <map>
+#endif
+
 extern "C" {
 #include "third_party/base32hex.h"
 }
@@ -899,6 +904,35 @@ matches_dir_prefix_or_file(std::string_view dir_prefix_or_file,
              || is_dir_separator(dir_prefix_or_file.back()));
 }
 
+#ifdef _WIN32
+static std::map<std::string, std::string> m_long_paths;
+#  define MAX_PATH 260
+std::string
+convert_to_long_path(std::string_view path_)
+{
+  std::string path(path_);
+  auto search = m_long_paths.find(path);
+  if (search != m_long_paths.end()) {
+    return search->second;
+  }
+
+  char long_path_buf[MAX_PATH+1];
+  uint32_t len = GetLongPathName(path.c_str(), long_path_buf, sizeof(long_path_buf));
+  if (len > MAX_PATH) {
+    throw core::Error(FMT("path too long to convert: {}, length: {}", path, len));
+  }
+
+  std::string long_path(long_path_buf);
+
+  if (!long_path.empty()) {
+    m_long_paths[path] = long_path;
+    return long_path;
+  } else {
+    return path;
+  }
+}
+#endif
+
 std::string
 normalize_abstract_absolute_path(std::string_view path)
 {
@@ -907,14 +941,16 @@ normalize_abstract_absolute_path(std::string_view path)
   }
 
 #ifdef _WIN32
-  if (path.find("\\") != std::string_view::npos) {
-    std::string new_path(path);
+  std::string path_(convert_to_long_path(path));
+
+  if (path_.find("\\") != std::string_view::npos) {
+    std::string new_path(path_);
     std::replace(new_path.begin(), new_path.end(), '\\', '/');
     return normalize_abstract_absolute_path(new_path);
   }
 
-  std::string drive(path.substr(0, 2));
-  path = path.substr(2);
+  std::string drive(path_.substr(0, 2));
+  path = path_.substr(2);
 #endif
 
   std::string result = "/";
